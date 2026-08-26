@@ -65,11 +65,22 @@ function fakeClock() {
 const TOOL_AFTER = { sessionID: "ses_1", tool: "bash", callID: "call_1", args: {} };
 const IDLE = { type: "session.idle", properties: { sessionID: "ses_1" } };
 
-function text(assistantText) {
-  return {
-    type: "message.part.updated",
-    properties: { info: { role: "assistant" }, part: { type: "text", text: assistantText } },
-  };
+async function assistantText(hooks, txt) {
+  await hooks.event({
+    event: {
+      type: "message.updated",
+      properties: { sessionID: "ses_1", info: { id: "msg_1", role: "assistant" } },
+    },
+  });
+  await hooks.event({
+    event: {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "ses_1",
+        part: { id: "prt_1", sessionID: "ses_1", messageID: "msg_1", type: "text", text: txt },
+      },
+    },
+  });
 }
 
 // --- ticket #2: scaffold + config + logging ---
@@ -121,9 +132,27 @@ test("does not nudge when the model produced text after the tool result", async 
   const client = makeClient();
   const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
-  await hooks.event({ event: text("Готово") });
+  await assistantText(hooks, "Готово");
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 0);
+});
+
+test("does not disarm on user text without an assistant message", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({
+    event: {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "ses_1",
+        part: { id: "prt_u1", sessionID: "ses_1", messageID: "msg_u1", type: "text", text: "юзер печатает" },
+      },
+    },
+  });
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
 });
 
 test("does not nudge when the model called another tool after the tool result", async () => {
@@ -175,7 +204,7 @@ test("resets the nudge budget when the model outputs after a nudge", async () =>
   const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, clock);
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
-  await hooks.event({ event: text("работаю") });
+  await assistantText(hooks, "работаю");
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 2);

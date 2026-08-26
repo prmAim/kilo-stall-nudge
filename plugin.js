@@ -28,6 +28,7 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
   const clearTimeoutFn = deps.clearTimeout ?? globalThis.clearTimeout;
 
   const state = { armed: false, sessionID: null, nudgeCount: 0, timer: null, armTime: 0 };
+  const assistantMessages = new Set();
 
   const ts = () => new Date(now()).toISOString();
 
@@ -114,8 +115,13 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
     },
     event: async ({ event }) => {
       switch (event.type) {
+        case "message.updated":
+          if (event.properties?.info?.role === "assistant") {
+            assistantMessages.add(event.properties.info.id);
+          }
+          break;
         case "message.part.updated":
-          if (isAssistantText(event)) disarm();
+          if (isAssistantText(event, assistantMessages)) disarm();
           break;
         case "session.idle":
           state.sessionID = event.properties?.sessionID ?? state.sessionID;
@@ -126,12 +132,11 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
   };
 };
 
-function isAssistantText(event) {
-  const properties = event.properties ?? {};
-  const info = properties.info ?? {};
-  const part = properties.part ?? {};
-  if (info.role !== "assistant") return false;
-  return part.type === "text" && (part.text ?? "").trim() !== "";
+function isAssistantText(event, assistantMessages) {
+  const part = event.properties?.part ?? {};
+  if (part.type !== "text") return false;
+  if (!(part.text ?? "").trim()) return false;
+  return assistantMessages.has(part.messageID);
 }
 
 function readConfig(options) {
