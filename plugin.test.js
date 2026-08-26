@@ -5,12 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StallNudge } from "./plugin.js";
 
-function makeClient(stallNudge) {
+function makeClient() {
   const calls = { prompts: [], toasts: [] };
   const client = {
-    config: {
-      get: async () => ({ data: { stallNudge } }),
-    },
     session: {
       prompt: async (req) => {
         calls.prompts.push(req);
@@ -77,16 +74,16 @@ function text(assistantText) {
 
 // --- ticket #2: scaffold + config + logging ---
 
-test("does not write a log and exposes no event hook when disabled", async () => {
+test("does not write a log and exposes no hooks when disabled", async () => {
   const dir = tempDir();
-  const hooks = await StallNudge({ client: makeClient({}), directory: dir });
+  const hooks = await StallNudge({ client: makeClient(), directory: dir }, {});
   assert.deepEqual(hooks, {});
   assert.equal(existsSync(logPath(dir)), false);
 });
 
 test("writes a startup line with resolved config defaults when enabled", async () => {
   const dir = tempDir();
-  await StallNudge({ client: makeClient({ enabled: true }), directory: dir }, fakeClock());
+  await StallNudge({ client: makeClient(), directory: dir }, { enabled: true }, fakeClock());
   const log = readFileSync(logPath(dir), "utf8");
   assert.match(log, /stall-nudge armed/);
   assert.match(log, /idleTimeoutMs=180000/);
@@ -97,7 +94,7 @@ test("writes a startup line with resolved config defaults when enabled", async (
 
 test("logs each observed tool hook and event when enabled", async () => {
   const dir = tempDir();
-  const hooks = await StallNudge({ client: makeClient({ enabled: true }), directory: dir }, fakeClock());
+  const hooks = await StallNudge({ client: makeClient(), directory: dir }, { enabled: true }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: { type: "session.idle" } });
   const log = readFileSync(logPath(dir), "utf8");
@@ -107,7 +104,7 @@ test("logs each observed tool hook and event when enabled", async () => {
 
 test("writes the log under a custom stateDir", async () => {
   const dir = tempDir();
-  await StallNudge({ client: makeClient({ enabled: true, stateDir: "logs" }), directory: dir }, fakeClock());
+  await StallNudge({ client: makeClient(), directory: dir }, { enabled: true, stateDir: "logs" }, fakeClock());
   assert.equal(existsSync(logPath(dir, "logs")), true);
   assert.equal(existsSync(logPath(dir, ".scratch")), false);
 });
@@ -116,8 +113,12 @@ test("writes the log under a custom stateDir", async () => {
 
 test("nudges with the configured prompt when the turn ends empty after a tool result", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true, nudgePrompt: "Продолжай, пожалуйста" });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge(
+    { client, directory: dir },
+    { enabled: true, nudgePrompt: "Продолжай, пожалуйста" },
+    fakeClock(),
+  );
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 1);
@@ -127,8 +128,8 @@ test("nudges with the configured prompt when the turn ends empty after a tool re
 
 test("does not nudge when the model produced text after the tool result", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: text("Готово") });
   await hooks.event({ event: IDLE });
@@ -137,8 +138,8 @@ test("does not nudge when the model produced text after the tool result", async 
 
 test("does not nudge when the model called another tool after the tool result", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks["tool.execute.before"]();
   await hooks.event({ event: IDLE });
@@ -148,8 +149,8 @@ test("does not nudge when the model called another tool after the tool result", 
 test("does not nudge when status.txt is DONE", async () => {
   const dir = tempDir();
   writeStatus(dir, "DONE");
-  const client = makeClient({ enabled: true });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 0);
@@ -157,8 +158,8 @@ test("does not nudge when status.txt is DONE", async () => {
 
 test("logs the nudge", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   const log = readFileSync(logPath(dir), "utf8");
@@ -169,9 +170,9 @@ test("logs the nudge", async () => {
 
 test("nudges when the idle timer expires with no model output", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true });
+  const client = makeClient();
   const clock = fakeClock();
-  const hooks = await StallNudge({ client, directory: dir }, clock);
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, clock);
   await hooks["tool.execute.after"](TOOL_AFTER);
   await clock.advance(180000);
   assert.equal(client.calls.prompts.length, 1);
@@ -179,9 +180,9 @@ test("nudges when the idle timer expires with no model output", async () => {
 
 test("resets the nudge budget when the model outputs after a nudge", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true });
+  const client = makeClient();
   const clock = fakeClock();
-  const hooks = await StallNudge({ client, directory: dir }, clock);
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, clock);
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   await hooks.event({ event: text("работаю") });
@@ -192,9 +193,9 @@ test("resets the nudge budget when the model outputs after a nudge", async () =>
 
 test("stops nudging after maxNudges without progress", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true, maxNudges: 2 });
+  const client = makeClient();
   const clock = fakeClock();
-  const hooks = await StallNudge({ client, directory: dir }, clock);
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true, maxNudges: 2 }, clock);
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   await hooks.event({ event: IDLE });
@@ -206,8 +207,8 @@ test("stops nudging after maxNudges without progress", async () => {
 
 test("alert mode only alerts, never nudges", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true, onStall: "alert" });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true, onStall: "alert" }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 0);
@@ -216,8 +217,8 @@ test("alert mode only alerts, never nudges", async () => {
 
 test("both mode nudges and alerts", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true, onStall: "both" });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true, onStall: "both" }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 1);
@@ -226,8 +227,8 @@ test("both mode nudges and alerts", async () => {
 
 test("writes the stall log line in the agreed format", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   const log = readFileSync(logPath(dir), "utf8");
@@ -236,8 +237,8 @@ test("writes the stall log line in the agreed format", async () => {
 
 test("alerts after the nudge budget is exhausted", async () => {
   const dir = tempDir();
-  const client = makeClient({ enabled: true, maxNudges: 1 });
-  const hooks = await StallNudge({ client, directory: dir }, fakeClock());
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true, maxNudges: 1 }, fakeClock());
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   await hooks.event({ event: IDLE });

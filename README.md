@@ -6,12 +6,11 @@
 
 ## Установка
 
-Один из способов подключения через `kilo.json`:
+Один из способов подключения через `kilo.json`. Опции плагина передаются **вторым элементом tuple** в массиве `plugin`:
 
 ```jsonc
 {
-  "plugin": ["file:///C:/Git/kilo-stall-nudge/plugin.js"],
-  "stallNudge": { "enabled": true }
+  "plugin": [["file:///C:/Git/kilo-stall-nudge/plugin.js", { "enabled": true }]]
 }
 ```
 
@@ -19,14 +18,13 @@
 
 ```jsonc
 {
-  "plugin": ["kilo-stall-nudge"],
-  "stallNudge": { "enabled": true }
+  "plugin": [["kilo-stall-nudge", { "enabled": true }]]
 }
 ```
 
-Либо файлом в каталоге плагинов: `{project}/.kilo/plugins/plugin.js` или `~/.config/kilo/plugins/plugin.js`.
+Либо файлом в каталоге плагинов (`{project}/.kilo/plugin/` или `~/.config/kilo/plugin/`) — тогда опции задать негде, дефолт `enabled: false`, так что для включения используй `file://`+tuple выше.
 
-## Конфигурация (ключ `stallNudge`)
+## Опции плагина (второй элемент tuple)
 
 | Поле | Дефолт | Описание |
 | --- | --- | --- |
@@ -66,4 +64,4 @@ npm test   # node --test
 
 ## Удаление
 
-Когда upstream-фикс (bounded-retry пустого ответа, Kilo-Org/kilocode #12209) выйдет — удали `kilo-stall-nudge` из `plugin` и ключ `stallNudge` из `kilo.json`.
+Когда upstream-фикс (bounded-retry пустого ответа, Kilo-Org/kilocode #12209) выйдет — удали запись `kilo-stall-nudge` из массива `plugin` в `kilo.json`.

@@ -11,8 +11,9 @@ const DEFAULTS = {
     "Продолжи с Next step из .scratch/state.md: сначала прочитай state.md и worklog.md, затем допиши heartbeat в worklog.md и выполни следующий шаг.",
 };
 
-const StallNudge = async ({ client, directory }, deps = {}) => {
-  const config = await readConfig(client);
+const StallNudge = async (ctx, options = {}, deps = {}) => {
+  const { client, directory } = ctx;
+  const config = readConfig(options);
 
   if (!config.enabled) {
     return {};
@@ -136,10 +137,8 @@ function isAssistantText(event) {
   return part.type === "text" && (part.text ?? "").trim() !== "";
 }
 
-async function readConfig(client) {
-  const res = await client.config.get();
-  const root = res && typeof res === "object" && "data" in res ? res.data : res;
-  const c = (root && root.stallNudge) || {};
+function readConfig(options) {
+  const c = options ?? {};
   return {
     enabled: c.enabled ?? DEFAULTS.enabled,
     stateDir: c.stateDir ?? DEFAULTS.stateDir,
