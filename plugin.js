@@ -106,16 +106,13 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
 
   return {
     "tool.execute.after": async (input) => {
-      await log(`[${ts()}] tool.execute.after`);
       state.sessionID = input?.sessionID ?? state.sessionID;
       arm();
     },
     "tool.execute.before": async () => {
-      await log(`[${ts()}] tool.execute.before`);
       disarm();
     },
     event: async ({ event }) => {
-      await log(`[${ts()}] event ${event.type}`);
       switch (event.type) {
         case "message.part.updated":
           if (isAssistantText(event)) disarm();

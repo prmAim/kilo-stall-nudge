@@ -92,16 +92,6 @@ test("writes a startup line with resolved config defaults when enabled", async (
   assert.match(log, /stateDir=\.scratch/);
 });
 
-test("logs each observed tool hook and event when enabled", async () => {
-  const dir = tempDir();
-  const hooks = await StallNudge({ client: makeClient(), directory: dir }, { enabled: true }, fakeClock());
-  await hooks["tool.execute.after"](TOOL_AFTER);
-  await hooks.event({ event: { type: "session.idle" } });
-  const log = readFileSync(logPath(dir), "utf8");
-  assert.match(log, /tool\.execute\.after/);
-  assert.match(log, /event session\.idle/);
-});
-
 test("writes the log under a custom stateDir", async () => {
   const dir = tempDir();
   await StallNudge({ client: makeClient(), directory: dir }, { enabled: true, stateDir: "logs" }, fakeClock());
