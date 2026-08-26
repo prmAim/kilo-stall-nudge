@@ -1,0 +1,10 @@
+{
+  "name": "kilo-stall-nudge",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "plugin.js",
+  "exports": "./plugin.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
