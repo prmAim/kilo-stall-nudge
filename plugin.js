@@ -11,7 +11,7 @@ const DEFAULTS = {
     "Продолжи с Next step из .scratch/state.md: сначала прочитай state.md и worklog.md, затем допиши heartbeat в worklog.md и выполни следующий шаг.",
 };
 
-export const StallNudge = async ({ client, directory }, deps = {}) => {
+const StallNudge = async ({ client, directory }, deps = {}) => {
   const config = await readConfig(client);
 
   if (!config.enabled) {
@@ -104,20 +104,23 @@ export const StallNudge = async ({ client, directory }, deps = {}) => {
   };
 
   return {
+    "tool.execute.after": async (input) => {
+      await log(`[${ts()}] tool.execute.after`);
+      state.sessionID = input?.sessionID ?? state.sessionID;
+      arm();
+    },
+    "tool.execute.before": async () => {
+      await log(`[${ts()}] tool.execute.before`);
+      disarm();
+    },
     event: async ({ event }) => {
       await log(`[${ts()}] event ${event.type}`);
       switch (event.type) {
-        case "tool.execute.after":
-          state.sessionID = event.properties?.sessionID ?? state.sessionID;
-          arm();
-          break;
-        case "tool.execute.before":
-          disarm();
-          break;
         case "message.part.updated":
           if (isAssistantText(event)) disarm();
           break;
         case "session.idle":
+          state.sessionID = event.properties?.sessionID ?? state.sessionID;
           if (state.armed) await handleStall();
           break;
       }
@@ -151,3 +154,6 @@ async function appendLog(logPath, line) {
   await mkdir(dirname(logPath), { recursive: true });
   await appendFile(logPath, line + "\n", "utf8");
 }
+
+export { StallNudge };
+export default { id: "stall-nudge", server: StallNudge };

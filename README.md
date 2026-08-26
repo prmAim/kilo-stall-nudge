@@ -58,6 +58,12 @@
 npm test   # node --test
 ```
 
+## Ограничения
+
+- Сигнал «ход завершился» — событие `session.idle` (в схеме Kilo помечено deprecated в пользу `session.status` с типом `idle`, но в 7.4.23 ещё эмитится).
+- «Прогресс» (текст) детектится по `message.part.updated` с ролью `assistant`; у провайдеров без стриминга текст может приходить иначе — проверять при smoke-тесте.
+- Плагин — временный стоп-гэп, см. выше.
+
 ## Удаление
 
 Когда upstream-фикс (bounded-retry пустого ответа, Kilo-Org/kilocode #12209) выйдет — удали `kilo-stall-nudge` из `plugin` и ключ `stallNudge` из `kilo.json`.
