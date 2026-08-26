@@ -74,14 +74,15 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
 
     if (wantsNudge && budgetLeft) {
       state.nudgeCount += 1;
+      const nudgeNumber = state.nudgeCount;
       await client.session.prompt({
         path: { id: state.sessionID },
         body: { parts: [{ type: "text", text: config.nudgePrompt }] },
       });
-      await log(`${base} → nudge #${state.nudgeCount}`);
+      await log(`${base} → nudge #${nudgeNumber}`);
       if (wantsAlert) {
         await client.tui.showToast({
-          body: { message: `STALL detected → nudge #${state.nudgeCount}`, variant: "warning" },
+          body: { message: `STALL detected → nudge #${nudgeNumber}`, variant: "warning" },
         });
       }
       arm();

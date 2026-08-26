@@ -254,6 +254,22 @@ test("writes the stall log line in the agreed format", async () => {
   assert.match(log, /STALL detected \(age=\d+s\) → nudge #1/);
 });
 
+test("logs the correct nudge number when the model responds during the nudge", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  let hooks;
+  client.session.prompt = async (req) => {
+    client.calls.prompts.push(req);
+    await hooks["tool.execute.before"]();
+    return {};
+  };
+  hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  const log = readFileSync(logPath(dir), "utf8");
+  assert.match(log, /→ nudge #1/);
+});
+
 test("alerts after the nudge budget is exhausted", async () => {
   const dir = tempDir();
   const client = makeClient();
