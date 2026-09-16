@@ -246,8 +246,8 @@ test("stops nudging after maxNudges without progress", async () => {
   const hooks = await StallNudge({ client, directory: dir }, { enabled: true, maxNudges: 2 }, clock);
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
-  await hooks.event({ event: IDLE });
-  await hooks.event({ event: IDLE });
+  await clock.advance(180000);
+  await clock.advance(180000);
   assert.equal(client.calls.prompts.length, 2);
 });
 
@@ -302,11 +302,86 @@ test("logs the correct nudge number when the model responds during the nudge", a
 test("alerts after the nudge budget is exhausted", async () => {
   const dir = tempDir();
   const client = makeClient();
-  const hooks = await StallNudge({ client, directory: dir }, { enabled: true, maxNudges: 1 }, fakeClock());
+  const clock = fakeClock();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true, maxNudges: 1 }, clock);
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
+  await clock.advance(180000);
+  await clock.advance(180000);
+  assert.equal(client.calls.prompts.length, 1);
+  assert.equal(client.calls.toasts.length, 2);
+});
+
+// --- ticket #6: nudge pacing — no instant re-stall after a nudge ---
+
+test("does not re-nudge on immediate session.idle after a nudge; next nudge waits idleTimeoutMs", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  const clock = fakeClock();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, clock);
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
   await hooks.event({ event: IDLE });
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 1);
-  assert.equal(client.calls.toasts.length, 2);
+  assert.match(readFileSync(logPath(dir), "utf8"), /→ skipped \(cooldown\)/);
+  await clock.advance(179000);
+  assert.equal(client.calls.prompts.length, 1);
+  await clock.advance(1000);
+  assert.equal(client.calls.prompts.length, 2);
+  assert.match(readFileSync(logPath(dir), "utf8"), /→ nudge #2/);
+});
+
+// --- ticket #7: cross-instance dedup ---
+
+function makeDeps(clock, pid) {
+  return { ...clock, pid };
+}
+
+test("skips the nudge while another instance's trace is fresh", async () => {
+  const dir = tempDir();
+  const clock = fakeClock();
+  const clientA = makeClient();
+  const clientB = makeClient();
+  const a = await StallNudge({ client: clientA, directory: dir }, { enabled: true }, makeDeps(clock, "inst-A"));
+  const b = await StallNudge({ client: clientB, directory: dir }, { enabled: true }, makeDeps(clock, "inst-B"));
+  await a["tool.execute.after"](TOOL_AFTER);
+  await b["tool.execute.after"](TOOL_AFTER);
+  await a.event({ event: IDLE });
+  await b.event({ event: IDLE });
+  assert.equal(clientA.calls.prompts.length, 1);
+  assert.equal(clientB.calls.prompts.length, 0);
+  assert.match(readFileSync(logPath(dir), "utf8"), /→ skipped \(recent nudge by another instance\)/);
+});
+
+test("nudges again once the other instance's trace goes stale", async () => {
+  const dir = tempDir();
+  const clock = fakeClock();
+  const clientA = makeClient();
+  const clientB = makeClient();
+  const a = await StallNudge({ client: clientA, directory: dir }, { enabled: true }, makeDeps(clock, "inst-A"));
+  const b = await StallNudge({ client: clientB, directory: dir }, { enabled: true }, makeDeps(clock, "inst-B"));
+  await a["tool.execute.after"](TOOL_AFTER);
+  await b["tool.execute.after"](TOOL_AFTER);
+  await a.event({ event: IDLE });
+  await b.event({ event: IDLE });
+  assert.equal(clientB.calls.prompts.length, 0);
+  await clock.advance(60000);
+  await b.event({ event: IDLE });
+  assert.equal(clientB.calls.prompts.length, 1);
+});
+
+test("own fresh marker does not block the next nudge", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  const clock = fakeClock();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, makeDeps(clock, "solo"));
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
+  await assistantText(hooks, "работаю");
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 2);
 });

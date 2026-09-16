@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const DEFAULTS = {
@@ -7,6 +7,7 @@ const DEFAULTS = {
   idleTimeoutMs: 180000,
   maxNudges: 3,
   onStall: "nudge",
+  dedupWindowMs: 60000,
   nudgePrompt:
     "Продолжи с Next step из .scratch/state.md: сначала прочитай state.md и worklog.md, затем допиши heartbeat в worklog.md и выполни следующий шаг.",
 };
@@ -21,19 +22,21 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
 
   const base = directory || process.cwd();
   const logPath = join(base, config.stateDir, "plugin.log");
+  const markerPath = join(base, config.stateDir, "nudge.marker");
   const log = (line) => appendLog(logPath, line);
 
   const now = deps.now ?? (() => Date.now());
   const setTimeoutFn = deps.setTimeout ?? globalThis.setTimeout;
   const clearTimeoutFn = deps.clearTimeout ?? globalThis.clearTimeout;
+  const pid = deps.pid ?? process.pid;
 
-  const state = { armed: false, sessionID: null, nudgeCount: 0, timer: null, armTime: 0 };
+  const state = { armed: false, sessionID: null, nudgeCount: 0, timer: null, armTime: 0, cooldownUntil: 0 };
   const assistantMessages = new Set();
 
   const ts = () => new Date(now()).toISOString();
 
   await log(
-    `[${ts()}] stall-nudge armed enabled=true stateDir=${config.stateDir} idleTimeoutMs=${config.idleTimeoutMs} maxNudges=${config.maxNudges} onStall=${config.onStall}`,
+    `[${ts()}] stall-nudge armed enabled=true stateDir=${config.stateDir} idleTimeoutMs=${config.idleTimeoutMs} maxNudges=${config.maxNudges} onStall=${config.onStall} dedupWindowMs=${config.dedupWindowMs}`,
   );
 
   const isDone = async () => {
@@ -64,7 +67,29 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
   const disarm = () => {
     state.armed = false;
     state.nudgeCount = 0;
+    state.cooldownUntil = 0;
     clearTimer();
+  };
+
+  const readRecentNudge = async () => {
+    try {
+      const [tsPart, markerPid] = (await readFile(markerPath, "utf8")).trim().split(/\s+/);
+      const markerTs = Number(tsPart);
+      if (!Number.isFinite(markerTs)) return null;
+      if (String(markerPid) === String(pid)) return null;
+      return markerTs;
+    } catch {
+      return null;
+    }
+  };
+
+  const writeNudgeMarker = async () => {
+    try {
+      await mkdir(dirname(markerPath), { recursive: true });
+      await writeFile(markerPath, `${now()} ${pid}\n`, "utf8");
+    } catch {
+      return;
+    }
   };
 
   const handleStall = async () => {
@@ -83,6 +108,18 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
       return;
     }
 
+    if (now() < state.cooldownUntil) {
+      await log(`${base} → skipped (cooldown)`);
+      return;
+    }
+
+    const otherNudgeTs = await readRecentNudge();
+    if (otherNudgeTs != null && now() - otherNudgeTs < config.dedupWindowMs) {
+      await log(`${base} → skipped (recent nudge by another instance)`);
+      arm();
+      return;
+    }
+
     const wantsNudge = config.onStall !== "alert";
     const wantsAlert = config.onStall !== "nudge";
     const budgetLeft = state.nudgeCount < config.maxNudges;
@@ -90,6 +127,8 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
     if (wantsNudge && budgetLeft) {
       state.nudgeCount += 1;
       const nudgeNumber = state.nudgeCount;
+      state.cooldownUntil = now() + config.idleTimeoutMs;
+      await writeNudgeMarker();
       await client.session.prompt({
         path: { id: state.sessionID },
         body: { parts: [{ type: "text", text: config.nudgePrompt }] },
@@ -104,6 +143,7 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
       return;
     }
 
+    state.cooldownUntil = now() + config.idleTimeoutMs;
     await client.tui.showToast({
       body: { message: "STALL detected: session stalled", variant: "warning" },
     });
@@ -163,6 +203,7 @@ function readConfig(options) {
     idleTimeoutMs: c.idleTimeoutMs ?? DEFAULTS.idleTimeoutMs,
     maxNudges: c.maxNudges ?? DEFAULTS.maxNudges,
     onStall: c.onStall ?? DEFAULTS.onStall,
+    dedupWindowMs: c.dedupWindowMs ?? DEFAULTS.dedupWindowMs,
     nudgePrompt: c.nudgePrompt ?? DEFAULTS.nudgePrompt,
   };
 }
