@@ -30,7 +30,7 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
   const clearTimeoutFn = deps.clearTimeout ?? globalThis.clearTimeout;
   const pid = deps.pid ?? process.pid;
 
-  const state = { armed: false, sessionID: null, nudgeCount: 0, timer: null, armTime: 0, cooldownUntil: 0, gen: 0 };
+  const state = { armed: false, sessionID: null, nudgeCount: 0, timer: null, armTime: 0, cooldownUntil: 0, disarmGen: 0 };
   const assistantMessages = new Set();
   const MAX_TRACKED_ASSISTANT_MESSAGES = 500;
   let handlingStall = false;
@@ -41,23 +41,17 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
     `[${ts()}] stall-nudge armed enabled=true stateDir=${config.stateDir} idleTimeoutMs=${config.idleTimeoutMs} maxNudges=${config.maxNudges} onStall=${config.onStall} dedupWindowMs=${config.dedupWindowMs}`,
   );
 
-  const isDone = async () => {
+  const readStateFile = async (name) => {
     try {
-      const content = await readFile(join(base, config.stateDir, "status.txt"), "utf8");
-      return content.trim() === "DONE";
+      return await readFile(join(base, config.stateDir, name), "utf8");
     } catch {
-      return false;
+      return null;
     }
   };
 
-  const isWaitingForHuman = async () => {
-    try {
-      const content = await readFile(join(base, config.stateDir, "state.md"), "utf8");
-      return content.includes("WAITING_FOR_HUMAN");
-    } catch {
-      return false;
-    }
-  };
+  const isDone = async () => (await readStateFile("status.txt"))?.trim() === "DONE";
+
+  const isWaitingForHuman = async () => (await readStateFile("state.md"))?.includes("WAITING_FOR_HUMAN");
 
   const clearTimer = () => {
     if (state.timer != null) {
@@ -70,7 +64,7 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
     state.armed = false;
     state.nudgeCount = 0;
     state.cooldownUntil = 0;
-    state.gen += 1;
+    state.disarmGen += 1;
     clearTimer();
   };
 
@@ -97,28 +91,28 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
 
   const processStall = async () => {
     const ageS = Math.round((now() - state.armTime) / 1000);
-    const base = `[${ts()}] STALL detected (age=${ageS}s)`;
+    const prefix = `[${ts()}] STALL detected (age=${ageS}s)`;
 
     if (await isDone()) {
-      await log(`${base} → skipped (DONE)`);
+      await log(`${prefix} → skipped (DONE)`);
       disarm();
       return;
     }
 
     if (await isWaitingForHuman()) {
-      await log(`${base} → skipped (WAITING_FOR_HUMAN)`);
+      await log(`${prefix} → skipped (WAITING_FOR_HUMAN)`);
       disarm();
       return;
     }
 
     if (now() < state.cooldownUntil) {
-      await log(`${base} → skipped (cooldown)`);
+      await log(`${prefix} → skipped (cooldown)`);
       return;
     }
 
     const otherNudgeTs = await readRecentNudge();
     if (otherNudgeTs != null && now() - otherNudgeTs < config.dedupWindowMs) {
-      await log(`${base} → skipped (recent nudge by another instance)`);
+      await log(`${prefix} → skipped (recent nudge by another instance)`);
       arm();
       return;
     }
@@ -132,28 +126,29 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
       const nudgeNumber = state.nudgeCount;
       state.cooldownUntil = now() + config.idleTimeoutMs;
       await writeNudgeMarker();
-      const genBeforePrompt = state.gen;
+      const genBeforePrompt = state.disarmGen;
       await client.session.prompt({
         path: { id: state.sessionID },
         body: { parts: [{ type: "text", text: config.nudgePrompt }] },
       });
-      await log(`${base} → nudge #${nudgeNumber}`);
+      await log(`${prefix} → nudge #${nudgeNumber}`);
       if (wantsAlert) {
         await client.tui.showToast({
           body: { message: `STALL detected → nudge #${nudgeNumber}`, variant: "warning" },
         });
       }
-      if (state.gen === genBeforePrompt) arm();
+      if (state.disarmGen === genBeforePrompt) arm();
       return;
     }
 
     state.cooldownUntil = now() + config.idleTimeoutMs;
-    const genBeforeToast = state.gen;
+    await writeNudgeMarker();
+    const genBeforeToast = state.disarmGen;
     await client.tui.showToast({
       body: { message: "STALL detected: session stalled", variant: "warning" },
     });
-    await log(`${base} → alert (no nudge)`);
-    if (state.gen === genBeforeToast) arm();
+    await log(`${prefix} → alert (no nudge)`);
+    if (state.disarmGen === genBeforeToast) arm();
   };
 
   const handleStall = async () => {
@@ -217,16 +212,15 @@ function isAssistantText(event, assistantMessages) {
   return assistantMessages.has(part.messageID);
 }
 
-function readConfig(options) {
-  const c = options ?? {};
+function readConfig(options = {}) {
   return {
-    enabled: c.enabled ?? DEFAULTS.enabled,
-    stateDir: c.stateDir ?? DEFAULTS.stateDir,
-    idleTimeoutMs: c.idleTimeoutMs ?? DEFAULTS.idleTimeoutMs,
-    maxNudges: c.maxNudges ?? DEFAULTS.maxNudges,
-    onStall: c.onStall ?? DEFAULTS.onStall,
-    dedupWindowMs: c.dedupWindowMs ?? DEFAULTS.dedupWindowMs,
-    nudgePrompt: c.nudgePrompt ?? DEFAULTS.nudgePrompt,
+    enabled: options.enabled ?? DEFAULTS.enabled,
+    stateDir: options.stateDir ?? DEFAULTS.stateDir,
+    idleTimeoutMs: options.idleTimeoutMs ?? DEFAULTS.idleTimeoutMs,
+    maxNudges: options.maxNudges ?? DEFAULTS.maxNudges,
+    onStall: options.onStall ?? DEFAULTS.onStall,
+    dedupWindowMs: options.dedupWindowMs ?? DEFAULTS.dedupWindowMs,
+    nudgePrompt: options.nudgePrompt ?? DEFAULTS.nudgePrompt,
   };
 }
 
