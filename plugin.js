@@ -45,6 +45,15 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
     }
   };
 
+  const isWaitingForHuman = async () => {
+    try {
+      const content = await readFile(join(base, config.stateDir, "state.md"), "utf8");
+      return content.includes("WAITING_FOR_HUMAN");
+    } catch {
+      return false;
+    }
+  };
+
   const clearTimer = () => {
     if (state.timer != null) {
       clearTimeoutFn(state.timer);
@@ -64,6 +73,12 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
 
     if (await isDone()) {
       await log(`${base} → skipped (DONE)`);
+      disarm();
+      return;
+    }
+
+    if (await isWaitingForHuman()) {
+      await log(`${base} → skipped (WAITING_FOR_HUMAN)`);
       disarm();
       return;
     }

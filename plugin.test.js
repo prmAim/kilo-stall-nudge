@@ -37,6 +37,11 @@ function writeStatus(dir, content, stateDir = ".scratch") {
   writeFileSync(join(dir, stateDir, "status.txt"), content);
 }
 
+function writeState(dir, content, stateDir = ".scratch") {
+  mkdirSync(join(dir, stateDir), { recursive: true });
+  writeFileSync(join(dir, stateDir, "state.md"), content);
+}
+
 function fakeClock() {
   let now = 0;
   let nextId = 0;
@@ -173,6 +178,30 @@ test("does not nudge when status.txt is DONE", async () => {
   await hooks["tool.execute.after"](TOOL_AFTER);
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 0);
+});
+
+test("does not nudge when state.md contains WAITING_FOR_HUMAN", async () => {
+  const dir = tempDir();
+  writeState(dir, "# State\n\n## Следующий шаг\nWAITING_FOR_HUMAN: ждём merge человеком\n");
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 0);
+});
+
+test("nudges again after the WAITING_FOR_HUMAN marker is removed", async () => {
+  const dir = tempDir();
+  writeState(dir, "WAITING_FOR_HUMAN");
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 0);
+  writeState(dir, "# State\n\n## Следующий шаг\nработаем\n");
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
 });
 
 test("logs the nudge", async () => {

@@ -43,12 +43,13 @@
 - Пинок = синтетический user-месседж через `client.session.prompt` с текстом `nudgePrompt`.
 - Счётчик пинков растёт на каждый пинок без вывода модели; сбрасывается при выводе. После `maxNudges` — только alert.
 - При `.scratch/status.txt == DONE` пинков нет никогда.
+- При наличии маркера `WAITING_FOR_HUMAN` в `<stateDir>/state.md` пинков нет (fail-closed: пока человек явно не снимет маркер).
 
 Логирование — в `<stateDir>/plugin.log`, формат: `[ts] STALL detected (age=Xs) → nudge #n`.
 
 ## Требования к state-файлам
 
-Плагин читает только `<stateDir>/status.txt` (гейт DONE). Содержимое `state.md`/`worklog.md` читает сама модель по промпту пинка.
+Плагин читает `<stateDir>/status.txt` (гейт DONE) и `<stateDir>/state.md` (гейт WAITING_FOR_HUMAN — подстрока в любом месте файла). Содержимое `worklog.md` читает сама модель по промпту пинка.
 
 ## Разработка
 
