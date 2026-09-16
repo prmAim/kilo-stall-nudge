@@ -385,3 +385,91 @@ test("own fresh marker does not block the next nudge", async () => {
   await hooks.event({ event: IDLE });
   assert.equal(client.calls.prompts.length, 2);
 });
+
+// --- review fixes: concurrency guard, gen guard, error recovery, bounded tracking ---
+
+test("drops concurrent stall handling while one is already in flight", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  const clock = fakeClock();
+  let releasePrompt;
+  const gate = new Promise((resolve) => {
+    releasePrompt = resolve;
+  });
+  client.session.prompt = async (req) => {
+    client.calls.prompts.push(req);
+    await gate;
+    return {};
+  };
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, clock);
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  const first = hooks.event({ event: IDLE });
+  const second = hooks.event({ event: IDLE });
+  releasePrompt();
+  await first;
+  await second;
+  assert.equal(client.calls.prompts.length, 1);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
+});
+
+test("does not re-arm when the model responds during the nudge prompt", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  const clock = fakeClock();
+  let hooks;
+  client.session.prompt = async (req) => {
+    client.calls.prompts.push(req);
+    await hooks["tool.execute.before"]();
+    return {};
+  };
+  hooks = await StallNudge({ client, directory: dir }, { enabled: true }, clock);
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
+  await clock.advance(180000);
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
+});
+
+test("recovers and retries after a failed nudge prompt", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  const clock = fakeClock();
+  let fail = true;
+  client.session.prompt = async (req) => {
+    client.calls.prompts.push(req);
+    if (fail) throw new Error("sdk down");
+    return {};
+  };
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, clock);
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  await clock.advance(180000);
+  assert.equal(client.calls.prompts.length, 1);
+  fail = false;
+  await clock.advance(180000);
+  assert.equal(client.calls.prompts.length, 2);
+});
+
+test("bounds the assistant message tracking to recent ids", async () => {
+  const dir = tempDir();
+  const client = makeClient();
+  const hooks = await StallNudge({ client, directory: dir }, { enabled: true }, fakeClock());
+  await hooks["tool.execute.after"](TOOL_AFTER);
+  for (let i = 1; i <= 501; i++) {
+    await hooks.event({
+      event: { type: "message.updated", properties: { sessionID: "ses_1", info: { id: `msg_${i}`, role: "assistant" } } },
+    });
+  }
+  await hooks.event({
+    event: {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "ses_1",
+        part: { id: "prt_old", sessionID: "ses_1", messageID: "msg_1", type: "text", text: "вытесненный текст" },
+      },
+    },
+  });
+  await hooks.event({ event: IDLE });
+  assert.equal(client.calls.prompts.length, 1);
+});

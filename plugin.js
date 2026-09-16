@@ -30,8 +30,10 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
   const clearTimeoutFn = deps.clearTimeout ?? globalThis.clearTimeout;
   const pid = deps.pid ?? process.pid;
 
-  const state = { armed: false, sessionID: null, nudgeCount: 0, timer: null, armTime: 0, cooldownUntil: 0 };
+  const state = { armed: false, sessionID: null, nudgeCount: 0, timer: null, armTime: 0, cooldownUntil: 0, gen: 0 };
   const assistantMessages = new Set();
+  const MAX_TRACKED_ASSISTANT_MESSAGES = 500;
+  let handlingStall = false;
 
   const ts = () => new Date(now()).toISOString();
 
@@ -68,6 +70,7 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
     state.armed = false;
     state.nudgeCount = 0;
     state.cooldownUntil = 0;
+    state.gen += 1;
     clearTimer();
   };
 
@@ -92,7 +95,7 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
     }
   };
 
-  const handleStall = async () => {
+  const processStall = async () => {
     const ageS = Math.round((now() - state.armTime) / 1000);
     const base = `[${ts()}] STALL detected (age=${ageS}s)`;
 
@@ -129,6 +132,7 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
       const nudgeNumber = state.nudgeCount;
       state.cooldownUntil = now() + config.idleTimeoutMs;
       await writeNudgeMarker();
+      const genBeforePrompt = state.gen;
       await client.session.prompt({
         path: { id: state.sessionID },
         body: { parts: [{ type: "text", text: config.nudgePrompt }] },
@@ -139,16 +143,30 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
           body: { message: `STALL detected → nudge #${nudgeNumber}`, variant: "warning" },
         });
       }
-      arm();
+      if (state.gen === genBeforePrompt) arm();
       return;
     }
 
     state.cooldownUntil = now() + config.idleTimeoutMs;
+    const genBeforeToast = state.gen;
     await client.tui.showToast({
       body: { message: "STALL detected: session stalled", variant: "warning" },
     });
     await log(`${base} → alert (no nudge)`);
-    arm();
+    if (state.gen === genBeforeToast) arm();
+  };
+
+  const handleStall = async () => {
+    if (handlingStall) return;
+    handlingStall = true;
+    try {
+      await processStall();
+    } catch (error) {
+      await log(`[${ts()}] stall-nudge error: ${error?.message ?? String(error)}`);
+      arm();
+    } finally {
+      handlingStall = false;
+    }
   };
 
   const arm = () => {
@@ -173,7 +191,11 @@ const StallNudge = async (ctx, options = {}, deps = {}) => {
       switch (event.type) {
         case "message.updated":
           if (event.properties?.info?.role === "assistant") {
-            assistantMessages.add(event.properties.info.id);
+            const id = event.properties.info.id;
+            if (!assistantMessages.has(id) && assistantMessages.size >= MAX_TRACKED_ASSISTANT_MESSAGES) {
+              assistantMessages.delete(assistantMessages.values().next().value);
+            }
+            assistantMessages.add(id);
           }
           break;
         case "message.part.updated":
@@ -209,8 +231,10 @@ function readConfig(options) {
 }
 
 async function appendLog(logPath, line) {
-  await mkdir(dirname(logPath), { recursive: true });
-  await appendFile(logPath, line + "\n", "utf8");
+  try {
+    await mkdir(dirname(logPath), { recursive: true });
+    await appendFile(logPath, line + "\n", "utf8");
+  } catch {}
 }
 
 export { StallNudge };
